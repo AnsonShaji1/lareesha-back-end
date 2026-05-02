@@ -1,12 +1,121 @@
 from django.core.management.base import BaseCommand
 from django.core.files.base import ContentFile
+from django.conf import settings
 from django.utils.text import slugify
 from api.models import Category, Product, ProductImage
 import os
+import boto3
+from urllib.parse import urlparse, urljoin
+from urllib.request import urlopen
 
 
 class Command(BaseCommand):
     help = 'Seed database with initial product data'
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--is-local",
+            action="store_true",
+            help="When set, read images from local filesystem. Default uses Cloudflare/R2 paths.",
+        )
+
+    def _env_bool(self, name: str, default: bool = False) -> bool:
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+
+    def _is_r2_media_enabled(self) -> bool:
+        """Whether default media storage points to R2/S3 backend."""
+        try:
+            default_storage = settings.STORAGES.get("default", {})
+            backend = default_storage.get("BACKEND", "")
+            return backend == "storages.backends.s3boto3.S3Boto3Storage"
+        except Exception:
+            return False
+
+    def _normalize_remote_image_name(self, source_image_path: str) -> str:
+        """
+        Convert R2 path/url into storage object name.
+        Examples:
+          /lareesha/test/4.jpg -> lareesha/test/4.jpg
+          https://<r2-public>/lareesha/test/4.jpg -> lareesha/test/4.jpg
+        """
+        if not source_image_path:
+            return ""
+
+        image_name = source_image_path.strip()
+        if image_name.startswith("http://") or image_name.startswith("https://"):
+            image_name = urlparse(image_name).path
+        media_url = (getattr(settings, "MEDIA_URL", "") or "").strip()
+        if media_url and image_name.startswith(media_url):
+            image_name = image_name[len(media_url):]
+
+        normalized = image_name.lstrip("/")
+        bucket_name = (os.environ.get("AWS_STORAGE_BUCKET_NAME") or "").strip().strip("/")
+        if bucket_name and normalized.startswith(f"{bucket_name}/"):
+            normalized = normalized[len(bucket_name) + 1:]
+        return normalized
+
+    def _get_r2_client(self):
+        endpoint_url = (os.environ.get("AWS_S3_ENDPOINT_URL") or "").strip()
+        access_key = (os.environ.get("AWS_ACCESS_KEY_ID") or "").strip()
+        secret_key = (os.environ.get("AWS_SECRET_ACCESS_KEY") or "").strip()
+        if not (endpoint_url and access_key and secret_key):
+            return None
+        return boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=os.environ.get("AWS_S3_REGION_NAME", "us-east-1"),
+        )
+
+    def _build_remote_image_url(self, source_image_path: str) -> str:
+        """Build full remote URL for a Cloudflare/R2 object path."""
+        image_path = (source_image_path or "").strip()
+        if image_path.startswith("http://") or image_path.startswith("https://"):
+            return image_path
+
+        # If input path includes bucket prefix (e.g. /lareesha/test/1.jpg),
+        # strip it for public R2 URL paths that are typically /test/1.jpg.
+        bucket_name = (os.environ.get("AWS_STORAGE_BUCKET_NAME") or "").strip().strip("/")
+        normalized_path = image_path.lstrip("/")
+        if bucket_name and normalized_path.startswith(f"{bucket_name}/"):
+            normalized_path = normalized_path[len(bucket_name) + 1:]
+
+        public_base = (os.environ.get("R2_PUBLIC_URL") or getattr(settings, "MEDIA_URL", "") or "").strip()
+        if not public_base.startswith("http://") and not public_base.startswith("https://"):
+            return ""
+
+        return urljoin(public_base.rstrip("/") + "/", normalized_path)
+
+    def load_remote_image(self, source_image_path: str, image_name: str):
+        """Download image from R2 (S3 API first, then public URL fallback)."""
+        object_key = self._normalize_remote_image_name(source_image_path)
+        bucket_name = (os.environ.get("AWS_STORAGE_BUCKET_NAME") or "").strip()
+        r2_client = self._get_r2_client()
+
+        if r2_client and bucket_name and object_key:
+            try:
+                obj = r2_client.get_object(Bucket=bucket_name, Key=object_key)
+                return ContentFile(obj["Body"].read(), name=image_name)
+            except Exception as e:
+                self.stdout.write(
+                    self.style.WARNING(f'Failed to fetch R2 object {bucket_name}/{object_key}: {e}')
+                )
+
+        remote_url = self._build_remote_image_url(source_image_path)
+        if not remote_url:
+            self.stdout.write(self.style.WARNING(f'Unable to build remote URL for: {source_image_path}'))
+            return None
+
+        try:
+            with urlopen(remote_url) as response:
+                return ContentFile(response.read(), name=image_name)
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'Failed to download image from {remote_url}: {e}'))
+            return None
 
     def load_local_image(self, image_path, image_name):
         """Load image from local path and return ContentFile object."""
@@ -30,7 +139,8 @@ class Command(BaseCommand):
         return images
 
     def handle(self, *args, **kwargs):
-        self.stdout.write('Seeding database...')
+        is_local = kwargs.get("is_local") or self._env_bool("SEED_IMAGES_LOCAL", default=False)
+        self.stdout.write(f'Seeding database... (is_local={is_local})')
         # Instance.delete() so FileField + signals remove files from R2 (QuerySet.delete() skips this).
         for image in list(ProductImage.objects.all()):
             image.delete()
@@ -66,7 +176,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/1.jpg',
+                    '/test/1.jpg',
                 ]
             },
             {
@@ -79,7 +189,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/2.jpg',
+                    '/test/2.jpg',
                 ]
             },
             {
@@ -92,7 +202,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/3.jpg',
+                    '/test/3.jpg',
                 ]
             },
             {
@@ -105,7 +215,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/4.jpg',
+                    '/test/4.jpg',
                 ]
             },
             {
@@ -118,7 +228,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/5.jpg'
+                    '/test/5.jpg'
                 ]
             },
             {
@@ -131,7 +241,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/6.jpg'
+                    '/test/6.jpg'
                 ]
             },
             {
@@ -144,7 +254,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/7.jpg'
+                    '/test/7.jpg'
                 ]
             },
             {
@@ -157,7 +267,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/8.jpg'
+                    '/test/8.jpg'
                 ]
             },
             {
@@ -170,7 +280,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/9.jpg'
+                    '/test/9.jpg'
                 ]
             },
             {
@@ -183,7 +293,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/10.jpg'
+                    '/test/10.jpg'
                 ]
             },
             {
@@ -196,7 +306,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/11.jpg'
+                    '/test/11.jpg'
                 ]
             },
             {
@@ -209,7 +319,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/12.jpg'
+                    '/test/12.jpg'
                 ]
             },
             {
@@ -222,7 +332,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/13.jpg'
+                    '/test/13.jpg'
                 ]
             },
             {
@@ -235,7 +345,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/14.jpg'
+                    '/test/14.jpg'
                 ]
             },
             {
@@ -248,7 +358,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/15.jpg'
+                    '/test/15.jpg'
                 ]
             },
             {
@@ -261,7 +371,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/16.jpg'
+                    '/test/16.jpg'
                 ]
             },
             {
@@ -274,7 +384,7 @@ class Command(BaseCommand):
                 'new_in': True,
                 'no_of_stock': 10,
                 'images': [
-                    '/home/anson/Desktop/lareesha_img/17.jpg'
+                    '/test/17.jpg'
                 ]
             }
         ]
@@ -284,28 +394,48 @@ class Command(BaseCommand):
             product = Product.objects.create(**product_data)
             
             for idx, source_image_path in enumerate(images):
-                if not os.path.isfile(source_image_path):
-                    self.stdout.write(
-                        self.style.WARNING(f'Image file not found: {source_image_path}')
-                    )
-                    continue
                 extension = os.path.splitext(source_image_path)[1] or ".jpg"
                 image_name = f"{product.id}_{idx}{extension}"
-                image_content = self.load_local_image(source_image_path, image_name)
-                
-                if image_content:
-                    ProductImage.objects.create(
-                        product=product,
-                        image=image_content,
-                        order=idx
-                    )
-                    self.stdout.write(
-                        self.style.SUCCESS(
-                            f'Loaded local image {os.path.basename(source_image_path)} for: {product.name}'
+
+                if is_local:
+                    if not os.path.isfile(source_image_path):
+                        self.stdout.write(
+                            self.style.WARNING(f'Image file not found locally: {source_image_path}')
                         )
-                    )
+                        continue
+
+                    image_content = self.load_local_image(source_image_path, image_name)
+
+                    if image_content:
+                        ProductImage.objects.create(
+                            product=product,
+                            image=image_content,
+                            order=idx
+                        )
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f'Loaded local image {os.path.basename(source_image_path)} for: {product.name}'
+                            )
+                        )
+                    else:
+                        self.stdout.write(self.style.WARNING(f'Skipped image for: {product.name}'))
+                    continue
+
                 else:
-                    self.stdout.write(self.style.WARNING(f'Skipped image for: {product.name}'))
+                    image_content = self.load_remote_image(source_image_path, image_name)
+                    if image_content:
+                        ProductImage.objects.create(
+                            product=product,
+                            image=image_content,
+                            order=idx
+                        )
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f'Loaded R2 image {source_image_path} as {image_name} for: {product.name}'
+                            )
+                        )
+                    else:
+                        self.stdout.write(self.style.WARNING(f'Skipped image for: {product.name}'))
             
             self.stdout.write(self.style.SUCCESS(f'Created product: {product.name}'))
 
