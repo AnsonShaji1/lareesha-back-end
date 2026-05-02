@@ -72,6 +72,8 @@ These are Bash steps (venv, DB, systemd) — the ops scripts complement them rat
 | 2 | `pip install -r requirements.txt` | If dependencies changed |
 | 3 | `python scripts/ops/deploy_web.py` | `migrate` → `collectstatic --noinput` → `sudo systemctl restart gunicorn` |
 
+Bash-only steps (pull **`master`**, optional stash/clean, **`deploy_web.py`**): **`EC2_GIT_PULL_MASTER_STEPS.md`**.
+
 Or run the pieces yourself (same logical order):
 
 1. `python scripts/ops/django_migrate.py`
