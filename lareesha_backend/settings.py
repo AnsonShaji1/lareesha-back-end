@@ -48,6 +48,7 @@ ALLOWED_HOSTS = [
     '65.0.181.35',
     'lareeshaluxe.com',
     'www.lareeshaluxe.com',
+    'api.lareeshaluxe.com'
 ]
 
 
@@ -273,6 +274,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:4200',
     'https://lareeshaluxe.com',
     'https://www.lareeshaluxe.com',
+    'api.lareeshaluxe.com'
 ]
 
 CORS_ALLOW_CREDENTIALS = True
