@@ -273,10 +273,20 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:4200',
     'http://127.0.0.1:4200',
     'https://lareeshaluxe.com',
-    'https://www.lareeshaluxe.com'
+    'https://www.lareeshaluxe.com',
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# Django 4.0+: unsafe methods check Origin against this list (required for HTTPS,
+# SPA + credentials, admin/allauth/rest-auth flows on api.*).
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:4200',
+    'http://127.0.0.1:4200',
+    'https://lareeshaluxe.com',
+    'https://www.lareeshaluxe.com',
+    'https://api.lareeshaluxe.com',
+]
 
 CORS_ALLOW_METHODS = [
     'DELETE',
