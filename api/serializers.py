@@ -2,7 +2,20 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 
-from .models import Address, Category, Product, ProductImage, CartItem, WishlistItem, Order, OrderItem, PaymentTransaction
+from dj_rest_auth.serializers import UserDetailsSerializer
+
+from .models import (
+    Address,
+    Category,
+    Product,
+    ProductImage,
+    CartItem,
+    WishlistItem,
+    Order,
+    OrderItem,
+    PaymentTransaction,
+    UserProfile,
+)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -10,6 +23,43 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'email', 'first_name', 'last_name', 'date_joined']
         read_only_fields = ['id', 'date_joined']
+
+
+class CustomUserDetailsSerializer(UserDetailsSerializer):
+    """Used by dj-rest-auth `/api/auth/user/` GET/PATCH."""
+
+    phone = serializers.CharField(required=False, allow_blank=True)
+    gender = serializers.ChoiceField(
+        required=False,
+        allow_blank=True,
+        choices=[c[0] for c in UserProfile.GENDER_CHOICES],
+    )
+
+    class Meta(UserDetailsSerializer.Meta):
+        # dj-rest-auth / DRF requires all declared fields
+        # to be present in Meta.fields.
+        fields = tuple(UserDetailsSerializer.Meta.fields) + ("phone", "gender")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        profile, _ = UserProfile.objects.get_or_create(user=instance)
+        data["phone"] = profile.phone
+        data["gender"] = profile.gender
+        return data
+
+    def update(self, instance, validated_data):
+        profile, _ = UserProfile.objects.get_or_create(user=instance)
+        phone = validated_data.pop("phone", None)
+        gender = validated_data.pop("gender", None)
+
+        instance = super().update(instance, validated_data)
+
+        if phone is not None:
+            profile.phone = phone
+        if gender is not None:
+            profile.gender = gender
+        profile.save()
+        return instance
 
 
 class AddressSerializer(serializers.ModelSerializer):

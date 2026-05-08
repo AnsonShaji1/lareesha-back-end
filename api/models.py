@@ -1,6 +1,26 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils.text import slugify
+from django.core.exceptions import ValidationError
+
+
+class UserProfile(models.Model):
+    """Extension fields for Django's built-in User."""
+
+    GENDER_CHOICES = [
+        ("male", "Male"),
+        ("female", "Female"),
+        ("other", "Other"),
+        ("prefer_not_to_say", "Prefer not to say"),
+    ]
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    gender = models.CharField(max_length=32, blank=True, default="", choices=GENDER_CHOICES)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Profile<{self.user_id}>"
 
 
 class Address(models.Model):
@@ -31,6 +51,52 @@ class Address(models.Model):
         if self.is_default:
             Address.objects.filter(user=self.user, is_default=True).exclude(id=self.id).update(is_default=False)
         super().save(*args, **kwargs)
+
+
+class ShippingZone(models.Model):
+    """Shipping fee rule bucket resolved from destination pincode prefix."""
+    name = models.CharField(max_length=100, unique=True)
+    code = models.SlugField(max_length=50, unique=True)
+    base_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    free_shipping_min_order = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    priority = models.PositiveSmallIntegerField(default=100, help_text="Lower value = higher priority")
+    is_active = models.BooleanField(default=True)
+    is_fallback = models.BooleanField(
+        default=False,
+        help_text="Used when no pincode prefix rule matches",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['priority', 'name']
+
+    def __str__(self):
+        return f"{self.name} (₹{self.base_fee})"
+
+
+class ShippingZonePinPrefix(models.Model):
+    """Maps a 3-6 digit pincode prefix to a shipping zone."""
+    zone = models.ForeignKey(ShippingZone, on_delete=models.CASCADE, related_name='pin_prefixes')
+    prefix = models.CharField(max_length=6, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['prefix']
+
+    def clean(self):
+        if not self.prefix or not self.prefix.isdigit():
+            raise ValidationError({'prefix': 'Prefix must contain only digits.'})
+        if len(self.prefix) < 3 or len(self.prefix) > 6:
+            raise ValidationError({'prefix': 'Prefix length must be between 3 and 6 digits.'})
+
+    def save(self, *args, **kwargs):
+        self.prefix = (self.prefix or '').strip()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.prefix} -> {self.zone.name}"
 
 
 class Category(models.Model):
@@ -219,9 +285,10 @@ class Order(models.Model):
     def __str__(self):
         return f"Order {self.order_number} {self.user.email}"
 
-    def calculate_totals(self):
-        """Calculate order totals based on items with product-specific tax and shipping rates."""
+    def calculate_totals(self, shipping_address=None):
+        """Calculate order totals using per-product tax and pincode-based shipping."""
         from decimal import Decimal
+        from .shipping import calculate_shipping_for_address
         
         subtotal = Decimal('0.00')
         shipping = Decimal('0.00')
@@ -238,9 +305,8 @@ class Order(models.Model):
             item_tax = (item_subtotal * item.product.tax_percentage) / 100
             tax += item_tax
             
-            # Add product-specific shipping (only if product doesn't have free shipping)
-            if not item.product.is_free_shipping_eligible:
-                shipping += item.product.shipping_cost * item.quantity
+        # Shipping is calculated once at order-level from destination.
+        shipping = calculate_shipping_for_address(shipping_address, subtotal)
         
         total = subtotal + shipping + tax
         

@@ -7,8 +7,14 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from api.views import GoogleAuthView, RegistrationView, LoginView, ForgotPasswordView, ResetPasswordConfirmView
+from api.admin_views import shipping_quote_admin_view
 
 urlpatterns = [
+    path(
+        'admin/shipping-quote/',
+        shipping_quote_admin_view,
+        name='admin_shipping_quote',
+    ),
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
     # Custom authentication endpoints (MUST come BEFORE include('dj_rest_auth.urls'))

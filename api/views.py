@@ -25,6 +25,7 @@ from .serializers import (
     UserSerializer,
     AddressSerializer
 )
+from .shipping import calculate_shipping_for_address, resolve_shipping_zone_by_pincode, calculate_shipping_for_zone
 import hmac
 import hashlib
 import random
@@ -35,6 +36,10 @@ from django.contrib.auth.models import User
 from google.auth.transport import requests
 from google.oauth2 import id_token
 import razorpay
+import json
+from urllib.request import urlopen
+from urllib.error import URLError, HTTPError
+import os
 
 
 def get_user_or_session(request):
@@ -246,24 +251,28 @@ class ForgotPasswordView(APIView):
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         
         # Create reset link (frontend URL)
-        reset_link = f"http://localhost:4200/reset-password/{uid}/{token}"
-        
+        env = (os.getenv("ENV") or "local").strip().lower()
+        if env == "local":
+            reset_link = f"http://localhost:4200/reset-password/{uid}/{token}"
+        else:
+            reset_link = f"https://lareeshaluxe.com/reset-password/{uid}/{token}"
+        print("reset_link", reset_link)
         # Send email
         try:
             subject = "Password Reset Request - Lareesha Luxe"
             message = f"""
-Hello {user.first_name or user.email},
+                Hello {user.first_name or user.email},
 
-We received a request to reset your password. Click the link below to reset your password:
+                We received a request to reset your password. Click the link below to reset your password:
 
-{reset_link}
+                {reset_link}
 
-This link will expire in 1 hour.
+                This link will expire in 1 hour.
 
-If you didn't request this, you can ignore this email.
+                If you didn't request this, you can ignore this email.
 
-Best regards,
-Lareesha Luxe Team
+                Best regards,
+                Lareesha Luxe Team
             """
             
             send_mail(
@@ -350,6 +359,68 @@ class AddressViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def validate_pincode(self, request):
+        """Validate an Indian pincode and return supported post office metadata."""
+        pincode = (request.query_params.get('pincode') or '').strip()
+
+        if not pincode:
+            return Response(
+                {'error': 'pincode is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not pincode.isdigit() or len(pincode) != 6:
+            return Response(
+                {'error': 'pincode must be a 6-digit number'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with urlopen(f'https://api.postalpincode.in/pincode/{pincode}', timeout=8) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+        except (URLError, HTTPError, TimeoutError, json.JSONDecodeError):
+            return Response(
+                {'error': 'Unable to validate pincode right now. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        if not payload or payload[0].get('Status') != 'Success':
+            return Response(
+                {'valid': False, 'error': 'Invalid pincode'},
+                status=status.HTTP_200_OK
+            )
+
+        post_offices = payload[0].get('PostOffice') or []
+        normalized = []
+        seen_cities = set()
+        seen_states = set()
+
+        for office in post_offices:
+            city = (office.get('District') or '').strip()
+            state = (office.get('State') or '').strip()
+            branch = (office.get('Name') or '').strip()
+            if city:
+                seen_cities.add(city.lower())
+            if state:
+                seen_states.add(state.lower())
+            normalized.append({
+                'name': branch,
+                'city': city,
+                'state': state,
+            })
+
+        return Response(
+            {
+                'valid': True,
+                'pincode': pincode,
+                'cities': sorted({office['city'] for office in normalized if office['city']}),
+                'states': sorted({office['state'] for office in normalized if office['state']}),
+                'post_offices': normalized,
+            },
+            status=status.HTTP_200_OK
+        )
 
     @action(detail=False, methods=['post'])
     def set_default(self, request):
@@ -624,11 +695,27 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Create a temporary order to calculate totals
         from decimal import Decimal
         subtotal = Decimal('0.00')
-        shipping = Decimal('0.00')
         tax = Decimal('0.00')
+        shipping = Decimal('0.00')
+        shipping_address = None
+        shipping_address_id = request.data.get('shipping_address_id')
+
+        if shipping_address_id is not None and shipping_address_id != '':
+            try:
+                aid = int(shipping_address_id)
+                shipping_address = Address.objects.get(id=aid, user=request.user)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid shipping_address_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except Address.DoesNotExist:
+                return Response(
+                    {'error': 'Shipping address not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
         
         cart_items_data = []
         
@@ -640,29 +727,83 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             item_tax = (item_subtotal * cart_item.product.tax_percentage) / 100
             tax += item_tax
             
-            # Add product-specific shipping (only if product doesn't have free shipping)
-            if not cart_item.product.is_free_shipping_eligible:
-                shipping += cart_item.product.shipping_cost * cart_item.quantity
-            
             cart_items_data.append({
                 'product_id': cart_item.product.id,
                 'product_name': cart_item.product.name,
                 'quantity': cart_item.quantity,
                 'price': float(cart_item.product.sale_price),
                 'tax_percentage': float(cart_item.product.tax_percentage),
-                'shipping_cost': float(cart_item.product.shipping_cost) if not cart_item.product.is_free_shipping_eligible else 0,
-                'is_free_shipping_eligible': cart_item.product.is_free_shipping_eligible,
             })
-        
+
+        shipping = calculate_shipping_for_address(shipping_address, subtotal)
         total = subtotal + shipping + tax
-        
+
+        shipping_zone_name = None
+        if shipping_address:
+            zone = resolve_shipping_zone_by_pincode(shipping_address.zip_code)
+            shipping_zone_name = zone.name if zone else None
+
         return Response({
             'subtotal': float(round(subtotal, 2)),
             'shipping': float(round(shipping, 2)),
             'tax': float(round(tax, 2)),
             'total': float(round(total, 2)),
+            'shipping_pending_address': shipping_address is None,
+            'shipping_zone': shipping_zone_name,
             'items': cart_items_data,
         }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'])
+    def shipping_quote(self, request):
+        """
+        Debug helper to test zone resolution and fee from pincode + subtotal.
+        Body: { "zip_code": "682020", "subtotal": 2400 }
+        """
+        zip_code = (request.data.get('zip_code') or '').strip()
+        subtotal_input = request.data.get('subtotal', 0)
+        from decimal import Decimal, InvalidOperation
+
+        if not zip_code:
+            return Response(
+                {'error': 'zip_code is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            subtotal = Decimal(str(subtotal_input))
+            if subtotal < 0:
+                return Response(
+                    {'error': 'subtotal must be a non-negative number'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except (InvalidOperation, TypeError):
+            return Response(
+                {'error': 'subtotal must be a valid number'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        zone = resolve_shipping_zone_by_pincode(zip_code)
+        shipping_fee = calculate_shipping_for_zone(zone, subtotal)
+
+        return Response(
+            {
+                'zip_code': zip_code,
+                'subtotal': float(round(subtotal, 2)),
+                'shipping': float(round(shipping_fee, 2)),
+                'zone': {
+                    'name': zone.name if zone else None,
+                    'code': zone.code if zone else None,
+                    'base_fee': float(zone.base_fee) if zone else 0.0,
+                    'free_shipping_min_order': (
+                        float(zone.free_shipping_min_order)
+                        if zone and zone.free_shipping_min_order is not None
+                        else None
+                    ),
+                    'is_fallback': zone.is_fallback if zone else True,
+                },
+            },
+            status=status.HTTP_200_OK
+        )
 
     @action(detail=False, methods=['post'])
     @transaction.atomic
@@ -751,8 +892,8 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
                 quantity=cart_item.quantity
             )
         
-        # Calculate totals based on product-specific tax and shipping
-        totals = order.calculate_totals()
+        # Calculate totals using destination-aware shipping rules
+        totals = order.calculate_totals(shipping_address=shipping_address)
         subtotal = totals['subtotal']
         shipping = totals['shipping']
         tax = totals['tax']

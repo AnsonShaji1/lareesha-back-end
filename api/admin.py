@@ -1,6 +1,16 @@
 from django.contrib import admin
+from django import forms
+from django.conf import settings
+from django.contrib import messages
+from django.core.exceptions import PermissionDenied
+from django.http import HttpRequest, HttpResponse
+from django.template.response import TemplateResponse
+from django.urls import path
+import json
+
 from django.utils.html import format_html
-from .models import Category, Product, ProductImage, CartItem, WishlistItem, Order, OrderItem, StockReservation, Address, PaymentTransaction
+from .models import Category, Product, ProductImage, CartItem, WishlistItem, Order, OrderItem, StockReservation, Address, PaymentTransaction, ShippingZone, ShippingZonePinPrefix, UserProfile
+from .seed_catalog import seed_from_products_json
 
 
 class ProductImageInline(admin.TabularInline):
@@ -222,6 +232,14 @@ class AddressAdmin(admin.ModelAdmin):
     )
 
 
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ['user', 'phone', 'gender', 'updated_at']
+    search_fields = ['user__email', 'user__first_name', 'user__last_name', 'phone']
+    list_filter = ['gender', 'updated_at']
+    readonly_fields = ['updated_at']
+
+
 @admin.register(PaymentTransaction)
 class PaymentTransactionAdmin(admin.ModelAdmin):
     list_display = ['transaction_id_display', 'order_number', 'user_email', 'total_display', 'status_display', 'transaction_date']
@@ -287,3 +305,147 @@ class PaymentTransactionAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         """Prevent deletion of payment records for audit purposes"""
         return False
+
+
+class ShippingZonePinPrefixInline(admin.TabularInline):
+    model = ShippingZonePinPrefix
+    extra = 1
+    fields = ['prefix']
+
+
+@admin.register(ShippingZone)
+class ShippingZoneAdmin(admin.ModelAdmin):
+    change_list_template = 'admin/api/shippingzone/change_list.html'
+
+    list_display = ['name', 'code', 'base_fee', 'free_shipping_min_order', 'priority', 'is_fallback', 'is_active']
+    list_filter = ['is_active', 'is_fallback']
+    search_fields = ['name', 'code']
+    inlines = [ShippingZonePinPrefixInline]
+    fieldsets = (
+        (
+            'Zone Rule',
+            {
+                'fields': (
+                    'name',
+                    'code',
+                    'base_fee',
+                    'free_shipping_min_order',
+                    'priority',
+                    'is_active',
+                    'is_fallback',
+                ),
+                'description': (
+                    'Shipping is resolved from destination pincode prefix and then this zone rule is applied. '
+                    'Lower priority value wins when multiple rules are eligible. '
+                    'Keep exactly one active fallback zone for unknown pincodes.'
+                ),
+            },
+        ),
+    )
+
+
+@admin.register(ShippingZonePinPrefix)
+class ShippingZonePinPrefixAdmin(admin.ModelAdmin):
+    list_display = ['prefix', 'zone', 'zone_priority']
+    list_filter = ['zone']
+    search_fields = ['prefix', 'zone__name', 'zone__code']
+    fieldsets = (
+        (
+            'Prefix Mapping',
+            {
+                'fields': ('prefix', 'zone'),
+                'description': (
+                    'Use numeric prefixes only (3 to 6 digits). '
+                    'Examples: 682 (city-level), 68203 (area-level). '
+                    'Checkout picks the longest matching prefix first.'
+                ),
+            },
+        ),
+    )
+
+    def zone_priority(self, obj):
+        return obj.zone.priority
+    zone_priority.short_description = 'Zone Priority'
+
+
+class SeedCatalogForm(forms.Form):
+    json_file = forms.FileField(
+        required=True,
+        help_text="Upload a JSON file containing a list of products (same shape as seed_db.py).",
+    )
+    reset_catalog = forms.BooleanField(
+        required=False,
+        initial=True,
+        help_text="Delete all categories/products/images before seeding.",
+    )
+    reset_orders = forms.BooleanField(
+        required=False,
+        initial=False,
+        help_text="Delete all orders / payment transactions before seeding.",
+    )
+
+
+def seed_catalog_admin_view(request: HttpRequest) -> HttpResponse:
+    if not request.user.is_active or not request.user.is_superuser:
+        raise PermissionDenied
+
+    if request.method == "POST":
+        form = SeedCatalogForm(request.POST, request.FILES)
+        if form.is_valid():
+            uploaded = form.cleaned_data["json_file"]
+            json_bytes = uploaded.read()  # type: ignore[union-attr]
+            if not json_bytes or not json_bytes.strip():
+                messages.error(request, "Uploaded file is empty. Please upload a valid JSON file.")
+            else:
+                try:
+                    env = getattr(settings, "ENV", "local")
+                    is_local_images = env == "local"
+                    local_root = getattr(settings, "SEED_LOCAL_IMAGE_ROOT", None) if is_local_images else None
+
+                    result = seed_from_products_json(
+                        json_bytes=json_bytes,
+                        reset_catalog=bool(form.cleaned_data.get("reset_catalog")),
+                        reset_orders=bool(form.cleaned_data.get("reset_orders")),
+                        is_local_images=is_local_images,
+                        local_image_root=local_root,
+                    )
+
+                    messages.success(
+                        request,
+                        f"Seed completed. Products: {result.created_products}, Categories: {result.created_categories}, Images: {result.created_images}. "
+                        f"(ENV={env}, images={'local' if is_local_images else 'remote'})",
+                    )
+                    form = SeedCatalogForm()
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    messages.error(request, f"Invalid JSON file: {e}")
+                except ValueError as e:
+                    messages.error(request, str(e))
+                except Exception as e:
+                    messages.error(request, f"Seed failed: {e}")
+
+    else:
+        form = SeedCatalogForm()
+
+    context = {
+        **admin.site.each_context(request),
+        "title": "Seed catalog from JSON",
+        "form": form,
+        "env": getattr(settings, "ENV", "local"),
+        "is_local_images": getattr(settings, "ENV", "local") == "local",
+        "local_image_root": str(getattr(settings, "SEED_LOCAL_IMAGE_ROOT", "")),
+    }
+    return TemplateResponse(request, "admin/seed_catalog.html", context)
+
+
+_original_get_urls = admin.site.get_urls
+
+
+def _get_urls_with_seed():
+    urls = _original_get_urls()
+    custom = [
+        path("seed-catalog/", admin.site.admin_view(seed_catalog_admin_view), name="seed-catalog"),
+    ]
+    return custom + urls
+
+
+admin.site.get_urls = _get_urls_with_seed

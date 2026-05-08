@@ -1,0 +1,57 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+    &rsaquo; <a href="{% url 'admin:api_shippingzone_changelist' %}">{% translate 'Shipping zones' %}</a>
+    &rsaquo; {% translate 'Shipping quote tester' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>{% translate 'Shipping quote tester' %}</h1>
+
+<p>{% translate 'Enter a destination pincode and cart subtotal to see which shipping zone applies and the fee after free-shipping rules.' %}</p>
+
+<form method="post">
+    {% csrf_token %}
+    <fieldset class="module aligned">
+        <div class="form-row">
+            <div>
+                <label for="id_zip_code">{% translate 'Pincode / ZIP' %}</label>
+                <input type="text" name="zip_code" id="id_zip_code" value="{{ zip_code }}" maxlength="12" autofocus />
+            </div>
+        </div>
+        <div class="form-row">
+            <div>
+                <label for="id_subtotal">{% translate 'Subtotal (₹)' %}</label>
+                <input type="text" name="subtotal" id="id_subtotal" value="{{ subtotal }}" placeholder="0" />
+            </div>
+        </div>
+    </fieldset>
+    <div class="submit-row">
+        <input type="submit" value="{% translate 'Calculate' %}" />
+    </div>
+</form>
+
+{% if error %}
+<p class="errornote">{{ error }}</p>
+{% endif %}
+
+{% if result %}
+<h2>{% translate 'Result' %}</h2>
+<table class="tabular">
+    <tbody>
+        <tr><th scope="row">{% translate 'Matched zone' %}</th><td>{% if result.zone_name %}{{ result.zone_name }}{% else %}—{% endif %}</td></tr>
+        <tr><th scope="row">{% translate 'Zone code' %}</th><td>{{ result.zone_code|default:'—' }}</td></tr>
+        <tr><th scope="row">{% translate 'Base fee (₹)' %}</th><td>{{ result.base_fee|default:'—' }}</td></tr>
+        <tr><th scope="row">{% translate 'Free shipping from (₹)' %}</th>
+            <td>{% if result.free_shipping_min_order is not None %}{{ result.free_shipping_min_order }}{% else %}—{% endif %}</td></tr>
+        <tr><th scope="row">{% translate 'Fallback zone' %}</th><td>{% if result.is_fallback %}{% translate 'Yes' %}{% else %}{% translate 'No' %}{% endif %}</td></tr>
+        <tr><th scope="row">{% translate 'Subtotal (₹)' %}</th><td>{{ result.subtotal_display }}</td></tr>
+        <tr><th scope="row">{% translate 'Shipping (₹)' %}</th><td><strong>{{ result.shipping_display }}</strong></td></tr>
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

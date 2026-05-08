@@ -1,0 +1,49 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block content %}
+  <div class="content">
+    <h1>{{ title }}</h1>
+
+    <div class="module">
+      <p>
+        <strong>ENV:</strong> {{ env }}<br />
+        <strong>Images:</strong> {% if is_local_images %}Local{% else %}Remote (R2/public URL){% endif %}<br />
+        {% if is_local_images %}
+          <strong>Local image root:</strong> <code>{{ local_image_root }}</code><br />
+          <small>JSON image paths like <code>/test/1.jpg</code> will be resolved as <code>{{ local_image_root }}/test/1.jpg</code>.</small>
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="module">
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        <fieldset class="module aligned">
+          {{ form.as_p }}
+        </fieldset>
+        <div class="submit-row">
+          <input type="submit" value="Seed now" class="default" />
+        </div>
+      </form>
+    </div>
+
+    <div class="module">
+      <h2>JSON format</h2>
+      <pre style="white-space: pre-wrap; margin: 0;">[
+  {
+    "name": "Product name",
+    "description": "Description",
+    "original_price": 369.00,
+    "sale_price": 369.00,
+    "tax_percentage": 0,
+    "category": "Necklaces",
+    "new_in": true,
+    "no_of_stock": 10,
+    "images": ["/test/1.jpg", "/test/2.jpg"]
+  }
+]</pre>
+    </div>
+  </div>
+{% endblock %}
+

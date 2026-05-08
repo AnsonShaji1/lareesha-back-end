@@ -22,6 +22,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / '.env', override=False)
 
+# Environment name (used for safe feature toggles like admin seeding)
+# Values: local | staging | prod (string comparison only)
+ENV = (os.environ.get("ENV") or "local").strip().lower()
+
 
 def _r2_creds_configured() -> bool:
     return bool(
@@ -93,7 +97,7 @@ ROOT_URLCONF = 'lareesha_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -169,6 +173,10 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Local images root used by admin JSON seeding when ENV=local
+# JSON image paths like "/test/1.jpg" are resolved as SEED_LOCAL_IMAGE_ROOT + "/test/1.jpg"
+SEED_LOCAL_IMAGE_ROOT = Path(os.environ.get("SEED_LOCAL_IMAGE_ROOT", str(BASE_DIR / "seed_images")))
 
 # Product images: optional Cloudflare R2 (S3-compatible).
 # - Set USE_R2_FOR_MEDIA=0 (or false / local) to always use local disk under MEDIA_ROOT (good for local dev
@@ -328,6 +336,11 @@ JWT_AUTH_HTTPONLY = True
 JWT_AUTH_SAMESITE = 'Lax'
 JWT_AUTH_REFRESH_COOKIE = 'jwt-refresh'
 
+# Use custom serializer for `/api/auth/user/` so extra profile fields persist.
+REST_AUTH = {
+    "USER_DETAILS_SERIALIZER": "api.serializers.CustomUserDetailsSerializer",
+}
+
 # Redirect URL after social auth
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
@@ -360,5 +373,5 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@lareesha-luxe
 PASSWORD_RESET_TIMEOUT = 3600  # 1 hour in seconds
 
 # Redirect to frontend after login
-LOGIN_REDIRECT_URL = 'http://localhost:4200/dashboard'
-SOCIALACCOUNT_PROVIDERS_DEFAULT_REDIRECT_URL = 'http://localhost:4200/dashboard'
+LOGIN_REDIRECT_URL = os.environ.get('LOGIN_REDIRECT_URL', 'http://localhost:4200')
+SOCIALACCOUNT_PROVIDERS_DEFAULT_REDIRECT_URL = os.environ.get('SOCIALACCOUNT_PROVIDERS_DEFAULT_REDIRECT_URL', 'http://localhost:4200')

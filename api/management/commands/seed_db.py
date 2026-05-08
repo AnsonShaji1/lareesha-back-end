@@ -398,6 +398,7 @@ class Command(BaseCommand):
                 image_name = f"{product.id}_{idx}{extension}"
 
                 if is_local:
+                    source_image_path = "/home/anson/Documents" + str(source_image_path)
                     if not os.path.isfile(source_image_path):
                         self.stdout.write(
                             self.style.WARNING(f'Image file not found locally: {source_image_path}')
