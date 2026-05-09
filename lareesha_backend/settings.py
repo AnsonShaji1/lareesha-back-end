@@ -373,7 +373,7 @@ SITE_BRAND_NAME = os.environ.get('SITE_BRAND_NAME', 'Lareesha Luxe')
 # Emails notified when a customer completes payment (comma-separated).
 _order_owner_emails_raw = os.environ.get(
     'ORDER_OWNER_NOTIFICATION_EMAILS',
-    'georgerosemariya@gmail.com,ansonshaji8@gmail.com',
+    'kichupoulose@gmail.com',
 )
 ORDER_OWNER_NOTIFICATION_EMAILS = [
     addr.strip() for addr in _order_owner_emails_raw.split(',') if addr.strip()
