@@ -1,0 +1,37 @@
+{% extends "emails/base_order_email.html" %}
+{% block title %}Order confirmed — {{ order.order_number }}{% endblock %}
+{% block tagline %}Thank you for shopping with us{% endblock %}
+{% block footer_text %}Questions? Visit our website for contact options. · {{ brand_name }}{% endblock %}
+{% block body %}
+<p style="margin:0 0 6px;font-size:13px;color:#8a7355;font-weight:600;letter-spacing:0.04em;">You’re all set</p>
+<h1 style="margin:0 0 10px;font-size:26px;font-weight:600;color:#2c2c2c;letter-spacing:-0.02em;">Thank you for your order</h1>
+<p style="margin:0 0 26px;font-size:15px;color:#6b6560;line-height:1.55;">We’ve received your payment and are preparing your purchase for shipment.</p>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-radius:10px;border:1px solid #ebe6df;margin-bottom:26px;">
+  <tr>
+    <td bgcolor="#faf8f6" style="padding:20px 22px;background-color:#faf8f6;background:linear-gradient(180deg,#f5f0ea 0%,#fafafa 100%);">
+      <p style="margin:0 0 4px;font-size:12px;color:#8a8278;text-transform:uppercase;letter-spacing:0.12em;font-weight:600;">Order number</p>
+      <p style="margin:0;font-size:20px;font-weight:600;color:#5c4d3c;letter-spacing:0.02em;">{{ order.order_number }}</p>
+      <p style="margin:10px 0 0;font-size:13px;color:#6b6560;">Placed on {{ order.created_at }}</p>
+    </td>
+  </tr>
+</table>
+
+<p style="margin:0 0 10px;font-size:11px;letter-spacing:0.14em;color:#8a8278;text-transform:uppercase;font-weight:600;">Delivery address</p>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:26px;border:1px solid #ebe6df;border-radius:10px;">
+  <tr>
+    <td style="padding:18px 20px;font-size:14px;color:#2c2c2c;line-height:1.6;">
+      <strong style="color:#2c2c2c;">{{ order.shipping_full_name }}</strong><br>
+      {{ order.shipping_address_line_1 }}{% if order.shipping_address_line_2 %}<br>{{ order.shipping_address_line_2 }}{% endif %}<br>
+      {{ order.shipping_city }}, {{ order.shipping_state }} {{ order.shipping_zip_code }}<br>
+      {{ order.shipping_country }}<br>
+      <span style="color:#6b6560;">{{ order.shipping_phone }}</span>
+    </td>
+  </tr>
+</table>
+
+<p style="margin:0 0 8px;font-size:11px;letter-spacing:0.14em;color:#8a8278;text-transform:uppercase;font-weight:600;">Your items</p>
+{% include "emails/includes/order_line_items.html" with total_label="Total paid" %}
+
+<p style="margin:28px 0 0;font-size:14px;color:#6b6560;line-height:1.6;">We’ll keep you updated as your order moves along.</p>
+{% endblock %}

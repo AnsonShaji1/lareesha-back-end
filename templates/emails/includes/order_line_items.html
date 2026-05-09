@@ -1,0 +1,39 @@
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:8px 0 0;">
+  <thead>
+    <tr>
+      <th align="left" style="padding:12px 10px 10px 0;border-bottom:2px solid #ebe6df;font-size:11px;letter-spacing:0.12em;color:#8a8278;text-transform:uppercase;font-weight:600;">Product</th>
+      <th align="center" style="padding:12px 8px 10px;border-bottom:2px solid #ebe6df;font-size:11px;letter-spacing:0.12em;color:#8a8278;text-transform:uppercase;font-weight:600;width:56px;">Qty</th>
+      <th align="right" style="padding:12px 0 10px 8px;border-bottom:2px solid #ebe6df;font-size:11px;letter-spacing:0.12em;color:#8a8278;text-transform:uppercase;font-weight:600;width:88px;">Price</th>
+      <th align="right" style="padding:12px 0 10px 8px;border-bottom:2px solid #ebe6df;font-size:11px;letter-spacing:0.12em;color:#8a8278;text-transform:uppercase;font-weight:600;width:96px;">Line</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td style="padding:14px 10px 14px 0;border-bottom:1px solid #f2ede6;font-size:14px;color:#2c2c2c;line-height:1.45;">{{ item.product_name }}</td>
+      <td align="center" style="padding:14px 8px;border-bottom:1px solid #f2ede6;font-size:14px;color:#5c5349;">{{ item.quantity }}</td>
+      <td align="right" style="padding:14px 0 14px 8px;border-bottom:1px solid #f2ede6;font-size:14px;color:#5c5349;">₹{{ item.product_price }}</td>
+      <td align="right" style="padding:14px 0 14px 8px;border-bottom:1px solid #f2ede6;font-size:14px;color:#2c2c2c;font-weight:600;">₹{{ item.line_total }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:20px;">
+  <tr>
+    <td style="padding:4px 0;font-size:14px;color:#6b6560;">Subtotal</td>
+    <td align="right" style="padding:4px 0;font-size:14px;color:#2c2c2c;">₹{{ order.subtotal }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;font-size:14px;color:#6b6560;">Shipping</td>
+    <td align="right" style="padding:4px 0;font-size:14px;color:#2c2c2c;">₹{{ order.shipping }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;font-size:14px;color:#6b6560;">Tax</td>
+    <td align="right" style="padding:4px 0;font-size:14px;color:#2c2c2c;">₹{{ order.tax }}</td>
+  </tr>
+  <tr>
+    <td style="padding:14px 0 0;border-top:2px solid #ebe6df;font-size:16px;font-weight:600;color:#2c2c2c;">{{ total_label|default:"Total" }}</td>
+    <td align="right" style="padding:14px 0 0;border-top:2px solid #ebe6df;font-size:16px;font-weight:600;color:#5c4d3c;">₹{{ order.total }}</td>
+  </tr>
+</table>

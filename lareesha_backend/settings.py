@@ -368,6 +368,16 @@ EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@lareesha-luxe.com')
+SITE_BRAND_NAME = os.environ.get('SITE_BRAND_NAME', 'Lareesha Luxe')
+
+# Emails notified when a customer completes payment (comma-separated).
+_order_owner_emails_raw = os.environ.get(
+    'ORDER_OWNER_NOTIFICATION_EMAILS',
+    'georgerosemariya@gmail.com,ansonshaji8@gmail.com',
+)
+ORDER_OWNER_NOTIFICATION_EMAILS = [
+    addr.strip() for addr in _order_owner_emails_raw.split(',') if addr.strip()
+]
 
 # Password reset token expire time
 PASSWORD_RESET_TIMEOUT = 3600  # 1 hour in seconds

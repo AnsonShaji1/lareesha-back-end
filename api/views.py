@@ -1,3 +1,7 @@
+import logging
+import hmac
+import hashlib
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -26,8 +30,9 @@ from .serializers import (
     AddressSerializer
 )
 from .shipping import calculate_shipping_for_address, resolve_shipping_zone_by_pincode, calculate_shipping_for_zone
-import hmac
-import hashlib
+
+logger = logging.getLogger(__name__)
+
 import random
 from datetime import timedelta
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -644,6 +649,160 @@ class WishlistViewSet(viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _format_order_owner_notification_body(order):
+    lines = [
+        'A customer completed payment — this order is now placed.',
+        '',
+        'Order',
+        f'  Order number: {order.order_number}',
+        f'  Order ID: {order.id}',
+        f'  Placed at: {order.created_at}',
+        f'  Order status: {order.status}',
+        f'  Payment status: {order.payment_status}',
+        f'  Razorpay order ID: {order.razorpay_order_id}',
+        f'  Razorpay payment ID: {order.razorpay_payment_id or "-"}',
+        '',
+        'Customer account',
+        f'  Email: {order.user.email}',
+        f'  Name: {(order.user.get_full_name() or "-").strip() or "-"}',
+        '',
+        'Shipping address',
+        f'  Name: {order.shipping_full_name}',
+        f'  Phone: {order.shipping_phone}',
+        f'  Email: {order.shipping_email}',
+        f'  Address line 1: {order.shipping_address_line_1}',
+        f'  Address line 2: {order.shipping_address_line_2 or "-"}',
+        f'  City: {order.shipping_city}',
+        f'  State: {order.shipping_state}',
+        f'  PIN / ZIP: {order.shipping_zip_code}',
+        f'  Country: {order.shipping_country}',
+        '',
+        'Line items',
+    ]
+    for item in order.items.order_by('id'):
+        line_total = item.line_total
+        lines.append(
+            f'  - {item.product_name} × {item.quantity} @ ₹{item.product_price} = ₹{line_total}'
+        )
+    lines.extend([
+        '',
+        'Totals',
+        f'  Subtotal: ₹{order.subtotal}',
+        f'  Shipping: ₹{order.shipping}',
+        f'  Tax: ₹{order.tax}',
+        f'  Total (paid): ₹{order.total}',
+    ])
+    return '\n'.join(lines)
+
+
+def _format_order_customer_confirmation_body(order):
+    lines = [
+        'Thank you for your order — your payment was successful.',
+        '',
+        f'Order number: {order.order_number}',
+        f'Placed on: {order.created_at}',
+        '',
+        'Shipping to',
+        f'  {order.shipping_full_name}',
+        f'  {order.shipping_address_line_1}',
+    ]
+    if order.shipping_address_line_2:
+        lines.append(f'  {order.shipping_address_line_2}')
+    lines.extend([
+        f'  {order.shipping_city}, {order.shipping_state} {order.shipping_zip_code}',
+        f'  {order.shipping_country}',
+        f'  Phone: {order.shipping_phone}',
+        '',
+        'Items',
+    ])
+    for item in order.items.order_by('id'):
+        line_total = item.line_total
+        lines.append(
+            f'  {item.product_name} × {item.quantity} @ ₹{item.product_price} = ₹{line_total}'
+        )
+    lines.extend([
+        '',
+        'Summary',
+        f'  Subtotal: ₹{order.subtotal}',
+        f'  Shipping: ₹{order.shipping}',
+        f'  Tax: ₹{order.tax}',
+        f'  Total paid: ₹{order.total}',
+        '',
+        'We will send updates as your order progresses. For help, please use the contact options on our website.',
+    ])
+    return '\n'.join(lines)
+
+
+def _order_email_context(order, **extra):
+    ctx = {
+        'order': order,
+        'items': list(order.items.order_by('id')),
+        'brand_name': settings.SITE_BRAND_NAME,
+    }
+    ctx.update(extra)
+    return ctx
+
+
+def _send_order_mail_multipart(subject, text_body, html_template_name, recipients, context):
+    html_body = render_to_string(html_template_name, context)
+    send_mail(
+        subject,
+        text_body,
+        settings.DEFAULT_FROM_EMAIL,
+        recipients,
+        fail_silently=False,
+        html_message=html_body,
+    )
+
+
+def send_order_customer_confirmation(order):
+    email = (order.shipping_email or '').strip()
+    if not email:
+        return
+    subject = f'Order confirmed — {order.order_number}'
+    body = _format_order_customer_confirmation_body(order)
+    ctx = _order_email_context(order)
+    try:
+        _send_order_mail_multipart(
+            subject,
+            body,
+            'emails/customer_order_confirmation.html',
+            [email],
+            ctx,
+        )
+    except Exception as exc:
+        logger.exception(
+            'Customer order confirmation email failed for %s (%s): %s',
+            order.order_number,
+            email,
+            exc,
+        )
+
+
+def send_order_placed_owner_notification(order):
+    recipients = settings.ORDER_OWNER_NOTIFICATION_EMAILS
+    if not recipients:
+        return
+    subject = f'New paid order — {order.order_number}'
+    body = _format_order_owner_notification_body(order)
+    account_name = (order.user.get_full_name() or '').strip() or order.user.email
+    ctx = _order_email_context(order, account_display_name=account_name)
+    try:
+        _send_order_mail_multipart(
+            subject,
+            body,
+            'emails/owner_order_notification.html',
+            recipients,
+            ctx,
+        )
+    except Exception as exc:
+        logger.exception(
+            'Owner order notification email failed for %s: %s',
+            order.order_number,
+            exc,
+        )
+
+
 class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
@@ -1032,6 +1191,10 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             order.stock_reservations.all().delete()
             order.stock_reserved = False
             order.save()
+        
+        # Notify store owners (non-blocking — failures are logged only)
+        send_order_placed_owner_notification(order)
+        send_order_customer_confirmation(order)
         
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
