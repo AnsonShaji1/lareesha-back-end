@@ -121,6 +121,7 @@ Run from directory that contains `scripts/ops/` (usually the same folder as `man
 | `django_shell.py` | `manage.py shell` | `python scripts/ops/django_shell.py` |
 | `django_createsuperuser.py` | `manage.py createsuperuser` | `python scripts/ops/django_createsuperuser.py` |
 | `restart_gunicorn.py` | `sudo systemctl restart gunicorn` | `python scripts/ops/restart_gunicorn.py` |
+| `restart_rqworker.py` | `sudo systemctl restart rqworker` | `python scripts/ops/restart_rqworker.py` |
 | `reload_nginx.py` | `sudo nginx -t` + reload nginx | `python scripts/ops/reload_nginx.py` |
 | `deploy_web.py` | Migrate + collectstatic + restart gunicorn | `python scripts/ops/deploy_web.py` |
 | `check_logs.py` | Tail / journalctl wrappers | See below |
@@ -176,7 +177,69 @@ Scripts that call `sudo` may prompt for a password unless you configure password
 
 ---
 
-## 8. **Troubleshooting**
+## 8. **Catalog seed jobs (admin bulk JSON)**
+
+Admin **Seed catalog from JSON** runs imports in the background via **django-rq** and **Redis**.
+
+### One-time server setup
+
+1. Install Redis: `sudo apt install -y redis-server` and ensure it is running.
+2. Add to `/etc/django/backend.env`:
+
+   ```bash
+   REDIS_URL=redis://127.0.0.1:6379/0
+   ```
+
+3. Install Python deps (`django-rq`, `redis`) and migrate:
+
+   ```bash
+   pip install -r requirements.txt
+   python scripts/ops/django_migrate.py
+   ```
+
+4. Create a systemd unit for the RQ worker (adjust paths):
+
+   ```ini
+   # /etc/systemd/system/rqworker.service
+   [Unit]
+   Description=RQ worker for Django catalog seed jobs
+   After=network.target redis-server.service
+
+   [Service]
+   User=ubuntu
+   Group=www-data
+   WorkingDirectory=/srv/django-app/back-end
+   EnvironmentFile=/etc/django/backend.env
+   ExecStart=/srv/django-app/venv/bin/python manage.py rqworker catalog_seed default --with-scheduler
+   Restart=always
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable rqworker
+   sudo systemctl start rqworker
+   ```
+
+5. Restart Gunicorn after deploy: `python scripts/ops/restart_gunicorn.py`
+
+If Redis is down, jobs fall back to an in-process background thread (less ideal for production; keep Redis + `rqworker` running).
+
+### CLI
+
+```bash
+# Run one job synchronously (debug)
+python manage.py run_catalog_seed_job --job-id=1
+
+# Re-enqueue stuck pending jobs
+python manage.py run_catalog_seed_job --enqueue-pending
+```
+
+---
+
+## 9. **Troubleshooting**
 
 | Issue | Where to look |
 |------|----------------|

@@ -1,0 +1,161 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrahead %}
+  {{ block.super }}
+  <style>
+    .seed-progress-wrap {
+      background: #f0f0f0;
+      border-radius: 6px;
+      height: 24px;
+      overflow: hidden;
+      margin: 12px 0;
+    }
+    .seed-progress-bar {
+      background: #417690;
+      height: 100%;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+    .seed-status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    .seed-status-pending { background: #ffc; color: #660; }
+    .seed-status-running { background: #def; color: #036; }
+    .seed-status-completed { background: #dfd; color: #060; }
+    .seed-status-failed { background: #fdd; color: #600; }
+    #seed-item-errors { max-height: 240px; overflow-y: auto; }
+    #seed-item-errors li { margin-bottom: 4px; }
+  </style>
+{% endblock %}
+
+{% block content %}
+  <div class="content">
+    <h1>{{ title }}</h1>
+
+    <p><a href="{{ seed_catalog_url }}">&larr; Back to seed catalog</a></p>
+
+    <div class="module" id="seed-job-panel">
+      <p>
+        <span id="seed-status-badge" class="seed-status-badge seed-status-{{ job.status }}">{{ job.get_status_display }}</span>
+      </p>
+
+      <div class="seed-progress-wrap" aria-label="Progress">
+        <div id="seed-progress-bar" class="seed-progress-bar" style="width: {{ job.progress_percent }}%;"></div>
+      </div>
+
+      <p id="seed-progress-text">
+        <strong id="seed-processed">{{ job.processed_products }}</strong> /
+        <strong id="seed-total">{{ job.total_products }}</strong> products
+        (<span id="seed-percent">{{ job.progress_percent }}</span>%)
+      </p>
+
+      <table>
+        <tbody>
+          <tr><th scope="row">Products created</th><td id="seed-created-products">{{ job.created_products }}</td></tr>
+          <tr><th scope="row">Categories created</th><td id="seed-created-categories">{{ job.created_categories }}</td></tr>
+          <tr><th scope="row">Images created</th><td id="seed-created-images">{{ job.created_images }}</td></tr>
+          <tr><th scope="row">Reset catalog</th><td>{{ job.reset_catalog|yesno:"Yes,No" }}</td></tr>
+          <tr><th scope="row">Reset orders</th><td>{{ job.reset_orders|yesno:"Yes,No" }}</td></tr>
+          <tr><th scope="row">ENV</th><td>{{ job.env }}</td></tr>
+        </tbody>
+      </table>
+
+      <p id="seed-error-block" style="display: none; color: #ba2121;">
+        <strong>Error:</strong> <span id="seed-error-message"></span>
+      </p>
+
+      <div id="seed-item-errors-wrap" style="display: none; margin-top: 16px;">
+        <h3>Image warnings</h3>
+        <ul id="seed-item-errors"></ul>
+      </div>
+    </div>
+
+    <p id="seed-polling-note" style="color: #666;">
+      This page updates automatically while the job runs.
+    </p>
+  </div>
+
+  <script>
+    (function () {
+      const statusUrl = "{{ status_url|escapejs }}";
+      const pollMs = 2000;
+      let timer = null;
+
+      const els = {
+        badge: document.getElementById("seed-status-badge"),
+        bar: document.getElementById("seed-progress-bar"),
+        processed: document.getElementById("seed-processed"),
+        total: document.getElementById("seed-total"),
+        percent: document.getElementById("seed-percent"),
+        createdProducts: document.getElementById("seed-created-products"),
+        createdCategories: document.getElementById("seed-created-categories"),
+        createdImages: document.getElementById("seed-created-images"),
+        errorBlock: document.getElementById("seed-error-block"),
+        errorMessage: document.getElementById("seed-error-message"),
+        itemErrorsWrap: document.getElementById("seed-item-errors-wrap"),
+        itemErrors: document.getElementById("seed-item-errors"),
+        pollingNote: document.getElementById("seed-polling-note"),
+      };
+
+      function statusLabel(status) {
+        const labels = { pending: "Pending", running: "Running", completed: "Completed", failed: "Failed" };
+        return labels[status] || status;
+      }
+
+      function applyStatus(data) {
+        els.badge.textContent = statusLabel(data.status);
+        els.badge.className = "seed-status-badge seed-status-" + data.status;
+        els.bar.style.width = data.progress_percent + "%";
+        els.processed.textContent = data.processed_products;
+        els.total.textContent = data.total_products;
+        els.percent.textContent = data.progress_percent;
+        els.createdProducts.textContent = data.created_products;
+        els.createdCategories.textContent = data.created_categories;
+        els.createdImages.textContent = data.created_images;
+
+        if (data.error_message) {
+          els.errorBlock.style.display = "block";
+          els.errorMessage.textContent = data.error_message;
+        }
+
+        if (data.item_errors && data.item_errors.length) {
+          els.itemErrorsWrap.style.display = "block";
+          els.itemErrors.innerHTML = data.item_errors.map(function (e) {
+            const product = e.product || "?";
+            const image = e.image || "";
+            const msg = e.message || "";
+            return "<li><strong>" + product + "</strong>" +
+              (image ? " — <code>" + image + "</code>" : "") +
+              (msg ? ": " + msg : "") + "</li>";
+          }).join("");
+        }
+
+        if (data.is_finished) {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+          els.pollingNote.textContent = data.status === "completed"
+            ? "Seed completed successfully."
+            : "Seed job finished with errors.";
+        }
+      }
+
+      function poll() {
+        fetch(statusUrl, { credentials: "same-origin", headers: { Accept: "application/json" } })
+          .then(function (r) { return r.json(); })
+          .then(applyStatus)
+          .catch(function () {});
+      }
+
+      poll();
+      timer = setInterval(poll, pollMs);
+    })();
+  </script>
+{% endblock %}

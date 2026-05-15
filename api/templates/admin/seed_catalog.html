@@ -14,6 +14,10 @@
           <small>JSON image paths like <code>/test/1.jpg</code> will be resolved as <code>{{ local_image_root }}/test/1.jpg</code>.</small>
         {% endif %}
       </p>
+      <p style="margin-top: 12px;">
+        Uploads are processed <strong>in the background</strong>. After you start a job, you will be taken to a progress page.
+        Large catalogs (100+ products) are supported.
+      </p>
     </div>
 
     <div class="module">
@@ -23,10 +27,40 @@
           {{ form.as_p }}
         </fieldset>
         <div class="submit-row">
-          <input type="submit" value="Seed now" class="default" />
+          <input type="submit" value="Start seed job" class="default" />
         </div>
       </form>
     </div>
+
+    {% if recent_jobs %}
+    <div class="module">
+      <h2>Recent jobs</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Products</th>
+            <th>Created</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in recent_jobs %}
+          <tr>
+            <td><a href="{% url 'admin:seed-catalog-job' job.pk %}">#{{ job.pk }}</a></td>
+            <td>{{ job.get_status_display }}</td>
+            <td>{{ job.progress_percent }}%</td>
+            <td>{{ job.processed_products }} / {{ job.total_products }}</td>
+            <td>{{ job.created_products }} products, {{ job.created_images }} images</td>
+            <td>{{ job.created_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
 
     <div class="module">
       <h2>JSON format</h2>
@@ -46,4 +80,3 @@
     </div>
   </div>
 {% endblock %}
-

@@ -77,6 +77,7 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
+    'django_rq',
     'api'
 ]
 
@@ -386,3 +387,16 @@ PASSWORD_RESET_TIMEOUT = 3600  # 1 hour in seconds
 # Redirect to frontend after login
 LOGIN_REDIRECT_URL = os.environ.get('LOGIN_REDIRECT_URL', 'http://localhost:4200')
 SOCIALACCOUNT_PROVIDERS_DEFAULT_REDIRECT_URL = os.environ.get('SOCIALACCOUNT_PROVIDERS_DEFAULT_REDIRECT_URL', 'http://localhost:4200')
+
+# django-rq — background catalog seed jobs (admin bulk JSON upload)
+REDIS_URL = (os.environ.get("REDIS_URL") or "redis://127.0.0.1:6379/0").strip()
+RQ_QUEUES = {
+    "default": {
+        "URL": REDIS_URL,
+        "DEFAULT_TIMEOUT": 3600,
+    },
+    "catalog_seed": {
+        "URL": REDIS_URL,
+        "DEFAULT_TIMEOUT": 3600,
+    },
+}

@@ -398,3 +398,63 @@ class StockReservation(models.Model):
 
     def __str__(self):
         return f"Reserved: {self.product.name} x {self.quantity} for Order {self.order.order_number}"
+
+
+class CatalogSeedJob(models.Model):
+    """Background catalog import from admin-uploaded JSON."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    json_file = models.FileField(upload_to="catalog_seed_jobs/%Y/%m/")
+    reset_catalog = models.BooleanField(default=True)
+    reset_orders = models.BooleanField(default=False)
+    total_products = models.PositiveIntegerField(default=0)
+    processed_products = models.PositiveIntegerField(default=0)
+    created_products = models.PositiveIntegerField(default=0)
+    created_categories = models.PositiveIntegerField(default=0)
+    created_images = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    item_errors = models.JSONField(default=list, blank=True)
+    rq_job_id = models.CharField(max_length=128, blank=True, default="")
+    env = models.CharField(max_length=32, blank=True, default="")
+    is_local_images = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="catalog_seed_jobs",
+    )
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Catalog seed job"
+        verbose_name_plural = "Catalog seed jobs"
+
+    def __str__(self):
+        return f"Seed job #{self.pk} ({self.status})"
+
+    @property
+    def progress_percent(self) -> int:
+        if self.status == self.Status.COMPLETED:
+            return 100
+        if self.total_products <= 0:
+            return 0
+        return min(100, int(100 * self.processed_products / self.total_products))
+
+    @property
+    def is_finished(self) -> bool:
+        return self.status in (self.Status.COMPLETED, self.Status.FAILED)

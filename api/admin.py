@@ -3,14 +3,32 @@ from django import forms
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.http import HttpRequest, HttpResponse
+from django.core.files.base import ContentFile
+from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
-from django.urls import path
+from django.urls import path, reverse
 import json
 
 from django.utils.html import format_html
-from .models import Category, Product, ProductImage, CartItem, WishlistItem, Order, OrderItem, StockReservation, Address, PaymentTransaction, ShippingZone, ShippingZonePinPrefix, UserProfile
-from .seed_catalog import seed_from_products_json
+from .models import (
+    CatalogSeedJob,
+    Category,
+    Product,
+    ProductImage,
+    CartItem,
+    WishlistItem,
+    Order,
+    OrderItem,
+    StockReservation,
+    Address,
+    PaymentTransaction,
+    ShippingZone,
+    ShippingZonePinPrefix,
+    UserProfile,
+)
+from .seed_catalog import validate_products_json
+from .seed_catalog_queue import enqueue_catalog_seed_job
 
 
 class ProductImageInline(admin.TabularInline):
@@ -371,7 +389,7 @@ class ShippingZonePinPrefixAdmin(admin.ModelAdmin):
 class SeedCatalogForm(forms.Form):
     json_file = forms.FileField(
         required=True,
-        help_text="Upload a JSON file containing a list of products (same shape as seed_db.py).",
+        help_text="Upload a JSON file containing a list of products (same shape as seed_db.py). Processing runs in the background.",
     )
     reset_catalog = forms.BooleanField(
         required=False,
@@ -385,9 +403,60 @@ class SeedCatalogForm(forms.Form):
     )
 
 
-def seed_catalog_admin_view(request: HttpRequest) -> HttpResponse:
+def _require_seed_admin(request: HttpRequest) -> None:
     if not request.user.is_active or not request.user.is_superuser:
         raise PermissionDenied
+
+
+@admin.register(CatalogSeedJob)
+class CatalogSeedJobAdmin(admin.ModelAdmin):
+    list_display = [
+        "id",
+        "status",
+        "progress_display",
+        "total_products",
+        "created_products",
+        "created_images",
+        "env",
+        "created_by",
+        "created_at",
+    ]
+    list_filter = ["status", "env"]
+    readonly_fields = [
+        "status",
+        "json_file",
+        "reset_catalog",
+        "reset_orders",
+        "total_products",
+        "processed_products",
+        "created_products",
+        "created_categories",
+        "created_images",
+        "error_message",
+        "item_errors",
+        "rq_job_id",
+        "env",
+        "is_local_images",
+        "created_by",
+        "started_at",
+        "completed_at",
+        "created_at",
+    ]
+    ordering = ["-created_at"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def progress_display(self, obj):
+        return f"{obj.progress_percent}%"
+    progress_display.short_description = "Progress"
+
+
+def seed_catalog_admin_view(request: HttpRequest) -> HttpResponse:
+    _require_seed_admin(request)
 
     if request.method == "POST":
         form = SeedCatalogForm(request.POST, request.FILES)
@@ -398,33 +467,41 @@ def seed_catalog_admin_view(request: HttpRequest) -> HttpResponse:
                 messages.error(request, "Uploaded file is empty. Please upload a valid JSON file.")
             else:
                 try:
-                    env = getattr(settings, "ENV", "local")
-                    is_local_images = env == "local"
-                    local_root = getattr(settings, "SEED_LOCAL_IMAGE_ROOT", None) if is_local_images else None
-
-                    result = seed_from_products_json(
-                        json_bytes=json_bytes,
-                        reset_catalog=bool(form.cleaned_data.get("reset_catalog")),
-                        reset_orders=bool(form.cleaned_data.get("reset_orders")),
-                        is_local_images=is_local_images,
-                        local_image_root=local_root,
-                    )
-
-                    messages.success(
-                        request,
-                        f"Seed completed. Products: {result.created_products}, Categories: {result.created_categories}, Images: {result.created_images}. "
-                        f"(ENV={env}, images={'local' if is_local_images else 'remote'})",
-                    )
-                    form = SeedCatalogForm()
+                    _, total_products = validate_products_json(json_bytes)
+                    if total_products == 0:
+                        messages.error(request, "JSON contains no products with a name.")
+                    else:
+                        env = getattr(settings, "ENV", "local")
+                        is_local_images = env == "local"
+                        job = CatalogSeedJob.objects.create(
+                            reset_catalog=bool(form.cleaned_data.get("reset_catalog")),
+                            reset_orders=bool(form.cleaned_data.get("reset_orders")),
+                            total_products=total_products,
+                            env=env,
+                            is_local_images=is_local_images,
+                            created_by=request.user,
+                        )
+                        job.json_file.save(
+                            uploaded.name or "products.json",
+                            ContentFile(json_bytes),
+                            save=True,
+                        )
+                        rq_id = enqueue_catalog_seed_job(job.pk)
+                        if rq_id:
+                            job.rq_job_id = rq_id
+                            job.save(update_fields=["rq_job_id"])
+                        return redirect("admin:seed-catalog-job", pk=job.pk)
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
                     messages.error(request, f"Invalid JSON file: {e}")
                 except ValueError as e:
                     messages.error(request, str(e))
                 except Exception as e:
-                    messages.error(request, f"Seed failed: {e}")
+                    messages.error(request, f"Could not start seed job: {e}")
 
     else:
         form = SeedCatalogForm()
+
+    recent_jobs = CatalogSeedJob.objects.select_related("created_by").order_by("-created_at")[:15]
 
     context = {
         **admin.site.each_context(request),
@@ -433,8 +510,45 @@ def seed_catalog_admin_view(request: HttpRequest) -> HttpResponse:
         "env": getattr(settings, "ENV", "local"),
         "is_local_images": getattr(settings, "ENV", "local") == "local",
         "local_image_root": str(getattr(settings, "SEED_LOCAL_IMAGE_ROOT", "")),
+        "recent_jobs": recent_jobs,
     }
     return TemplateResponse(request, "admin/seed_catalog.html", context)
+
+
+def seed_catalog_job_view(request: HttpRequest, pk: int) -> HttpResponse:
+    _require_seed_admin(request)
+    job = get_object_or_404(CatalogSeedJob, pk=pk)
+
+    context = {
+        **admin.site.each_context(request),
+        "title": f"Seed job #{job.pk}",
+        "job": job,
+        "status_url": reverse("admin:seed-catalog-job-status", kwargs={"pk": job.pk}),
+        "seed_catalog_url": reverse("admin:seed-catalog"),
+    }
+    return TemplateResponse(request, "admin/seed_catalog_job.html", context)
+
+
+def seed_catalog_job_status_view(request: HttpRequest, pk: int) -> JsonResponse:
+    _require_seed_admin(request)
+    job = get_object_or_404(CatalogSeedJob, pk=pk)
+    return JsonResponse(
+        {
+            "id": job.pk,
+            "status": job.status,
+            "progress_percent": job.progress_percent,
+            "total_products": job.total_products,
+            "processed_products": job.processed_products,
+            "created_products": job.created_products,
+            "created_categories": job.created_categories,
+            "created_images": job.created_images,
+            "error_message": job.error_message,
+            "item_errors": job.item_errors,
+            "is_finished": job.is_finished,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        }
+    )
 
 
 _original_get_urls = admin.site.get_urls
@@ -444,6 +558,16 @@ def _get_urls_with_seed():
     urls = _original_get_urls()
     custom = [
         path("seed-catalog/", admin.site.admin_view(seed_catalog_admin_view), name="seed-catalog"),
+        path(
+            "seed-catalog/jobs/<int:pk>/",
+            admin.site.admin_view(seed_catalog_job_view),
+            name="seed-catalog-job",
+        ),
+        path(
+            "seed-catalog/jobs/<int:pk>/status/",
+            admin.site.admin_view(seed_catalog_job_status_view),
+            name="seed-catalog-job-status",
+        ),
     ]
     return custom + urls
 
