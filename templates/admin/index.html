@@ -3,6 +3,54 @@
 
 {% block content %}
   <div id="content-main">
+    <div class="module" id="recent-paid-orders">
+      <h2>Recent paid orders</h2>
+      <p style="margin: 0 0 12px; color: var(--body-quiet-color);">
+        Orders with successful payment (payment captured). Newest first.
+      </p>
+      {% if recent_paid_orders %}
+        <table style="width: 100%;">
+          <thead>
+            <tr>
+              <th>Order</th>
+              <th>Customer</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Placed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for order in recent_paid_orders %}
+              <tr>
+                <th scope="row">
+                  <a href="{% url 'admin:api_order_change' order.pk %}">{{ order.order_number }}</a>
+                </th>
+                <td>
+                  {{ order.shipping_full_name|default:order.user.email }}
+                  <br />
+                  <span style="color: var(--body-quiet-color); font-size: 0.85em;">{{ order.user.email }}</span>
+                </td>
+                <td>₹{{ order.total }}</td>
+                <td>
+                  <span style="color: #0a7a3d; font-weight: 600;">{{ order.get_payment_status_display }}</span>
+                  <br />
+                  <span style="color: var(--body-quiet-color); font-size: 0.85em;">{{ order.get_status_display }}</span>
+                </td>
+                <td>{{ order.created_at|date:"M j, Y, g:i a" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p style="margin: 12px 0 0;">
+          <a href="{% url 'admin:api_order_changelist' %}?payment_status__exact=captured">
+            View all paid orders ({{ recent_paid_orders_total }})
+          </a>
+        </p>
+      {% else %}
+        <p style="margin: 0; color: var(--body-quiet-color);">No paid orders yet.</p>
+      {% endif %}
+    </div>
+
     <div class="module">
       <h2>Data tools</h2>
       <ul class="object-tools">
@@ -16,4 +64,3 @@
     </div>
   </div>
 {% endblock %}
-

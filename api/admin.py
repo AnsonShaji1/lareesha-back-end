@@ -573,3 +573,22 @@ def _get_urls_with_seed():
 
 
 admin.site.get_urls = _get_urls_with_seed
+
+
+_original_admin_index = admin.site.index
+
+
+def _admin_index_with_recent_orders(request, extra_context=None):
+    """Inject recent paid orders for the admin dashboard widget."""
+    ctx = dict(extra_context or {})
+    paid_orders = (
+        Order.objects.filter(payment_status='captured')
+        .select_related('user')
+        .order_by('-created_at')
+    )
+    ctx['recent_paid_orders'] = paid_orders[:20]
+    ctx['recent_paid_orders_total'] = paid_orders.count()
+    return _original_admin_index(request, extra_context=ctx)
+
+
+admin.site.index = _admin_index_with_recent_orders
