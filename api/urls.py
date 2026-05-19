@@ -1,6 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import CategoryViewSet, ProductViewSet, CartViewSet, WishlistViewSet, OrderViewSet, AddressViewSet
+from .views import (
+    CategoryViewSet,
+    ProductViewSet,
+    CartViewSet,
+    WishlistViewSet,
+    OrderViewSet,
+    AddressViewSet,
+    HomepageView,
+)
 
 router = DefaultRouter()
 router.register(r'categories', CategoryViewSet, basename='category')
@@ -11,6 +19,7 @@ router.register(r'addresses', AddressViewSet, basename='address')
 router.register(r'orders', OrderViewSet, basename='order')
 
 urlpatterns = [
+    path('homepage/', HomepageView.as_view(), name='homepage'),
     path('', include(router.urls)),
 ]
 

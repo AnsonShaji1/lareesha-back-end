@@ -138,8 +138,8 @@ def load_local_image(full_image_path: Path, image_name: str) -> ContentFile | No
 
 
 def _get_or_create_category(name: str) -> Category:
-    base_name = (name or "").strip() or "Uncategorized"
-    base_slug = slugify(base_name) or "uncategorized"
+    base_name = (name or "").strip()
+    base_slug = slugify(base_name)
 
     existing = Category.objects.filter(name=base_name).first()
     if existing:

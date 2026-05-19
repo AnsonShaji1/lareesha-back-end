@@ -17,7 +17,7 @@ from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
-from .models import Category, Product, CartItem, WishlistItem, Order, OrderItem, StockReservation, Address, PaymentTransaction
+from .models import Category, Product, ProductImage, CartItem, WishlistItem, Order, OrderItem, StockReservation, Address, PaymentTransaction
 from .serializers import (
     CategorySerializer,
     ProductSerializer,
@@ -454,6 +454,134 @@ class AddressViewSet(viewsets.ModelViewSet):
         return Response({'error': 'No default address set'}, status=status.HTTP_404_NOT_FOUND)
 
 
+def _absolute_media_url(request, file_field):
+    if not file_field:
+        return None
+    url = file_field.url
+    if url.startswith(('http://', 'https://')):
+        return url
+    if request is not None:
+        return request.build_absolute_uri(url)
+    return url
+
+
+def _category_display_image_url(category, request):
+    if category.image:
+        return _absolute_media_url(request, category.image)
+    first_image = (
+        ProductImage.objects.filter(product__category=category)
+        .exclude(image='')
+        .order_by('-product__created_at', 'order')
+        .first()
+    )
+    if first_image and first_image.image:
+        return _absolute_media_url(request, first_image.image)
+    return None
+
+
+def _product_has_image(product):
+    return any(img.image for img in product.images.all())
+
+
+def _recent_products_queryset(**filters):
+    """Newest products first (homepage strips, category pages, new-in)."""
+    return (
+        Product.objects.filter(**filters)
+        .select_related('category')
+        .prefetch_related('images')
+        .order_by('-created_at', '-id')
+    )
+
+
+def _serialize_homepage_products(queryset, limit, request):
+    """Return (serialized products, total with images in queryset)."""
+    serializer_context = {'request': request}
+    selected = []
+    total_with_images = 0
+    for product in queryset:
+        if not _product_has_image(product):
+            continue
+        total_with_images += 1
+        if len(selected) < limit:
+            selected.append(product)
+    serialized = ProductSerializer(selected, many=True, context=serializer_context).data
+    return serialized, total_with_images
+
+
+class HomepageView(APIView):
+    """Homepage payload: categories, new arrivals, and per-category product strips."""
+    permission_classes = [AllowAny]
+    SECTION_LIMIT = 6
+
+    def get(self, request):
+        include_new_arrivals = self._param_enabled(
+            request, 'include_new_arrivals', default=True
+        )
+        include_category_sections = self._param_enabled(
+            request, 'include_category_sections', default=True
+        )
+        section_limit = self._section_limit(request)
+
+        categories = []
+        for category in Category.objects.all().order_by('name'):
+            categories.append({
+                'id': category.id,
+                'name': category.name,
+                'slug': category.slug,
+                'image_url': _category_display_image_url(category, request),
+            })
+
+        payload = {'categories': categories}
+
+        if include_new_arrivals:
+            new_arrivals_qs = _recent_products_queryset(new_in=True)
+            new_arrivals, new_arrivals_count = _serialize_homepage_products(
+                new_arrivals_qs, section_limit, request
+            )
+            payload['new_arrivals'] = new_arrivals
+            payload['new_arrivals_count'] = new_arrivals_count
+
+        if include_category_sections:
+            category_sections = []
+            for category in Category.objects.all().order_by('name'):
+                category_qs = _recent_products_queryset(category=category)
+                products, product_count = _serialize_homepage_products(
+                    category_qs, section_limit, request
+                )
+                if not products:
+                    continue
+                category_sections.append({
+                    'category': {
+                        'id': category.id,
+                        'name': category.name,
+                        'slug': category.slug,
+                        'image_url': _category_display_image_url(category, request),
+                    },
+                    'products': products,
+                    'product_count': product_count,
+                })
+            payload['category_sections'] = category_sections
+
+        return Response(payload)
+
+    @staticmethod
+    def _param_enabled(request, name, default=True):
+        value = request.query_params.get(name)
+        if value is None:
+            return default
+        return str(value).lower() in ['1', 'true', 'yes']
+
+    def _section_limit(self, request):
+        raw = request.query_params.get('section_limit')
+        if raw is None:
+            return self.SECTION_LIMIT
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            return self.SECTION_LIMIT
+        return max(1, min(limit, self.SECTION_LIMIT))
+
+
 class ProductViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
@@ -483,9 +611,11 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(sale_price__lte=max_price)
         price_sort = self.request.query_params.get('price_sort')
         if price_sort == 'low-to-high':
-            queryset = queryset.order_by('sale_price')
+            queryset = queryset.order_by('sale_price', '-created_at', '-id')
         elif price_sort == 'high-to-low':
-            queryset = queryset.order_by('-sale_price')
+            queryset = queryset.order_by('-sale_price', '-created_at', '-id')
+        else:
+            queryset = queryset.order_by('-created_at', '-id')
         return queryset
 
 
