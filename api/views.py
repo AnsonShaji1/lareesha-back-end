@@ -261,31 +261,34 @@ class ForgotPasswordView(APIView):
             reset_link = f"http://localhost:4200/reset-password/{uid}/{token}"
         else:
             reset_link = f"https://lareeshaluxe.com/reset-password/{uid}/{token}"
-        print("reset_link", reset_link)
         # Send email
         try:
-            subject = "Password Reset Request - Lareesha Luxe"
-            message = f"""
-                Hello {user.first_name or user.email},
-
-                We received a request to reset your password. Click the link below to reset your password:
-
-                {reset_link}
-
-                This link will expire in 1 hour.
-
-                If you didn't request this, you can ignore this email.
-
-                Best regards,
-                Lareesha Luxe Team
-            """
-            
+            brand_name = settings.SITE_BRAND_NAME
+            user_name = (user.first_name or '').strip()
+            subject = f'Reset your password — {brand_name}'
+            greeting = f'Hello {user_name},' if user_name else 'Hello,'
+            message = (
+                f'{greeting}\n\n'
+                f'We received a request to reset your password for your {brand_name} account.\n\n'
+                f'Reset your password (link expires in 1 hour):\n{reset_link}\n\n'
+                f"If you didn't request this, you can ignore this email.\n\n"
+                f'— {brand_name}'
+            )
+            html_body = render_to_string(
+                'emails/password_reset.html',
+                {
+                    'brand_name': brand_name,
+                    'user_name': user_name,
+                    'reset_link': reset_link,
+                },
+            )
             send_mail(
                 subject,
                 message,
                 settings.DEFAULT_FROM_EMAIL,
                 [email],
                 fail_silently=False,
+                html_message=html_body,
             )
             
             return Response(
