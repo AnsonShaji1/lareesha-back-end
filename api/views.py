@@ -514,7 +514,7 @@ def _serialize_homepage_products(queryset, limit, request):
 class HomepageView(APIView):
     """Homepage payload: categories, new arrivals, and per-category product strips."""
     permission_classes = [AllowAny]
-    SECTION_LIMIT = 6
+    SECTION_LIMIT = 12
 
     def get(self, request):
         include_new_arrivals = self._param_enabled(
